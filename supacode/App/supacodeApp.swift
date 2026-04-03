@@ -176,15 +176,7 @@ struct SupacodeApp: App {
     }
     _store = State(initialValue: appStore)
 
-    let cliRouter = CLICommandRouter()
-    let cliServer = CLISocketServer(router: cliRouter)
-    let cliLogger = SupaLogger("CLIService")
-    do {
-      try cliServer.start()
-      cliLogger.info("CLI socket server started at \(ProwlSocket.defaultPath)")
-    } catch {
-      cliLogger.warning("Failed to start CLI socket server: \(String(describing: error))")
-    }
+    let cliServer = Self.makeCLISocketServer(appStore: appStore)
     _cliSocketServer = State(initialValue: cliServer)
 
     runtime.onQuit = { [weak appStore] in
@@ -198,6 +190,66 @@ struct SupacodeApp: App {
       ghosttyShortcuts: shortcuts,
       commandKeyObserver: keyObserver
     )
+  }
+
+  private static func makeCLISocketServer(
+    appStore: StoreOf<AppFeature>
+  ) -> CLISocketServer {
+    let openHandler = OpenCommandHandler(
+      resolver: { path in
+        guard let path else { return .bringToFront }
+        let normalized = URL(fileURLWithPath: path, isDirectory: true)
+          .standardizedFileURL.path(percentEncoded: false)
+        let repositories = appStore.state.repositories
+        // Search all worktrees for a matching working directory.
+        for repository in repositories.repositories {
+          for worktree in repository.worktrees {
+            let worktreePath = worktree.workingDirectory
+              .standardizedFileURL.path(percentEncoded: false)
+            if worktreePath == normalized {
+              return .worktree(
+                id: worktree.id,
+                name: worktree.name,
+                path: worktreePath,
+                repositoryRoot: repository.rootURL
+                  .standardizedFileURL.path(percentEncoded: false)
+              )
+            }
+          }
+          // Also match repository root for non-worktree repos.
+          let repoRoot = repository.rootURL
+            .standardizedFileURL.path(percentEncoded: false)
+          if repoRoot == normalized,
+             !repository.capabilities.supportsWorktrees,
+             repository.capabilities.supportsRunnableFolderActions
+          {
+            return .worktree(
+              id: repository.id,
+              name: repository.name,
+              path: repoRoot,
+              repositoryRoot: repoRoot
+            )
+          }
+        }
+        return .unknownPath(normalized)
+      },
+      selectWorktree: { worktreeID in
+        appStore.send(.repositories(.selectWorktree(worktreeID, focusTerminal: true)))
+      },
+      addAndOpen: { url in
+        appStore.send(.repositories(.repositoryManagement(.openRepositories([url]))))
+      }
+    )
+    let cliRouter = CLICommandRouter(openHandler: openHandler)
+    let cliServer = CLISocketServer(router: cliRouter)
+    let logger = SupaLogger("CLIService")
+    do {
+      try cliServer.start()
+      logger.info("CLI socket server started at \(ProwlSocket.defaultPath)")
+    } catch {
+      logger.warning("Failed to start CLI socket server: \(String(describing: error))")
+    }
+    return cliServer
   }
 
   var body: some Scene {
