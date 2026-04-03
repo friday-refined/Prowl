@@ -176,7 +176,7 @@ struct SupacodeApp: App {
     }
     _store = State(initialValue: appStore)
 
-    let cliServer = Self.makeCLISocketServer(appStore: appStore)
+    let cliServer = Self.makeCLISocketServer(appStore: appStore, terminalManager: terminalManager)
     _cliSocketServer = State(initialValue: cliServer)
 
     runtime.onQuit = { [weak appStore] in
@@ -193,7 +193,8 @@ struct SupacodeApp: App {
   }
 
   private static func makeCLISocketServer(
-    appStore: StoreOf<AppFeature>
+    appStore: StoreOf<AppFeature>,
+    terminalManager: WorktreeTerminalManager
   ) -> CLISocketServer {
     let openHandler = OpenCommandHandler(
       resolver: { path in
@@ -240,7 +241,13 @@ struct SupacodeApp: App {
         appStore.send(.repositories(.repositoryManagement(.openRepositories([url]))))
       }
     )
-    let cliRouter = CLICommandRouter(openHandler: openHandler)
+    let listHandler = ListCommandHandler {
+      ListRuntimeSnapshotBuilder.makeSnapshot(
+        repositoriesState: appStore.state.repositories,
+        terminalManager: terminalManager
+      )
+    }
+    let cliRouter = CLICommandRouter(openHandler: openHandler, listHandler: listHandler)
     let cliServer = CLISocketServer(router: cliRouter)
     let logger = SupaLogger("CLIService")
     do {
